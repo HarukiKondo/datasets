@@ -23,9 +23,11 @@ import os
 from typing import Any, Iterable, List, Tuple
 
 from absl import logging
+import riegeli
 import six
 import tensorflow.compat.v2 as tf
 
+from tensorflow_datasets.core import constants
 from tensorflow_datasets.core import example_parser
 from tensorflow_datasets.core import example_serializer
 from tensorflow_datasets.core import hashing
@@ -123,15 +125,22 @@ def _get_shard_boundaries(
   ]
 
 
-def _write_tfrecord(
-    path: str,
-    iterator: Iterable[bytes],
-):
-  """Write single (non sharded) TFrecord file from iterator."""
-  with tf.io.TFRecordWriter(path) as writer:
-    for serialized_example in iterator:
-      writer.write(serialized_example)
-    writer.flush()
+def _write_records(path: str, iterator: Iterable[bytes],
+                   file_format: constants.FileFormat):
+  """Write single (non sharded) Record of given `file_format` from iterator."""
+  if file_format == constants.FileFormat.TFRECORD:
+    with tf.io.TFRecordWriter(path) as writer:
+      for serialized_example in iterator:
+        writer.write(serialized_example)
+      writer.flush()
+  elif file_format == constants.FileFormat.RIEGELI:
+    with riegeli.RecordWriter(tf.io.gfile.GFile(path, "wb")) as writer:
+      writer.write_records(records=iterator)
+  else:
+    raise ValueError(
+        "Invalid `file_format`: %s. Valid formats: %r" %
+        (file_format,
+         [file_format.name for file_format in constants.FileFormat]))
 
 
 def _get_number_shards(
@@ -180,12 +189,17 @@ class Writer(object):
 
   """
 
-  def __init__(self, example_specs, path, hash_salt):
+  def __init__(self,
+               example_specs,
+               path,
+               hash_salt,
+               file_format=constants.DEFAULT_FILE_FORMAT):
     self._example_specs = example_specs
     self._serializer = example_serializer.ExampleSerializer(example_specs)
     self._shuffler = shuffle.Shuffler(os.path.dirname(path), hash_salt)
     self._num_examples = 0
     self._path = path
+    self._file_format = file_format
 
   def write(self, key, example):
     """Writes given Example.
@@ -217,7 +231,7 @@ class Writer(object):
       for shard_spec in shard_specs:
         iterator = itertools.islice(
             examples_generator, 0, shard_spec.examples_number)
-        _write_tfrecord(shard_spec.path, iterator)
+        _write_records(shard_spec.path, iterator, self._file_format)
     except shuffle.DuplicatedKeysError as err:
       _raise_error_for_duplicated_keys(err.item1, err.item2,
                                        self._example_specs)
@@ -242,18 +256,24 @@ class BeamWriter(object):
   """
   _OUTPUT_TAG_BUCKETS_LEN_SIZE = "tag_buckets_len_size"
 
-  def __init__(self, example_specs, path, hash_salt):
+  def __init__(self,
+               example_specs,
+               path,
+               hash_salt,
+               file_format=constants.DEFAULT_FILE_FORMAT):
     """Init BeamWriter.
 
     Args:
       example_specs:
       path: str, path where to write tfrecord file. Eg:
         "/foo/mnist-train.tfrecord".
-        The suffix (eg: `.00000-of-00004` will be added by the BeamWriter.
-        Note that file "{path}.shard_lengths.json" is also created. It contains
+        The suffix (eg: `.00000-of-00004` will be added by the BeamWriter. Note
+          that file "{path}.shard_lengths.json" is also created. It contains
           a list with the number of examples in each final shard. Eg:
-          "[10,11,10,11]".
+            "[10,11,10,11]".
       hash_salt: string, the salt to use for hashing of keys.
+      file_format: constants.FileFormat, format of the record files in
+        which the dataset will be read/written from.
     """
     self._original_state = dict(example_specs=example_specs, path=path,
                                 hash_salt=hash_salt)
@@ -263,6 +283,7 @@ class BeamWriter(object):
     self._example_specs = example_specs
     self._hasher = hashing.Hasher(hash_salt)
     self._split_info = None
+    self._file_format = file_format
 
   def __getstate__(self):
     return self._original_state
@@ -348,7 +369,7 @@ class BeamWriter(object):
     shard_path, examples_by_bucket = shardid_examples
     examples = list(itertools.chain(*[
         ex[1] for ex in sorted(examples_by_bucket)]))
-    _write_tfrecord(shard_path, examples)
+    _write_records(shard_path, examples, self._file_format)
 
   def write_from_pcollection(self, examples_pcollection):
     """Returns PTransform to write (key, example) PCollection to tfrecords."""

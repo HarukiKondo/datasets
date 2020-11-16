@@ -18,6 +18,7 @@
 import collections
 import hashlib
 import os
+import tempfile
 
 import tensorflow as tf
 from tensorflow_datasets import testing
@@ -240,6 +241,17 @@ class GetClassPathUrlTest(testing.TestCase):
     self.assertEqual(
         cls_url,
         (constants.SRC_BASE_URL + 'tensorflow_datasets/core/utils/py_utils.py'))
+
+
+class ListInfoFilesTest(testing.TestCase):
+
+  def test_list_info_files(self):
+    test_tmp_dir = self.tmp_dir
+    (_, _) = tempfile.mkstemp(suffix='.tfrecord', dir=test_tmp_dir)
+    (_, _) = tempfile.mkstemp(suffix='.riegeli', dir=test_tmp_dir)
+    (_, info_file_path) = tempfile.mkstemp(dir=test_tmp_dir)
+    info_files = py_utils.list_info_files(test_tmp_dir)
+    self.assertEqual(info_files, [os.path.basename(info_file_path)])
 
 
 def _flatten_with_path(v):

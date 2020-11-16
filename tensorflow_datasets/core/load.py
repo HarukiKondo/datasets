@@ -525,13 +525,25 @@ def dataset_name_and_kwargs_from_name_str(
     raise
 
 
+def _validate_format(kwarg_val):
+  valid_file_formats = [
+      file_format.name for file_format in constants.FileFormat
+  ]
+  if kwarg_val not in valid_file_formats:
+    raise ValueError("Supported file formats: %r. Given: %s" %
+                     (valid_file_formats, kwarg_val))
+
+
 def _kwargs_str_to_kwargs(kwargs_str):
+  """Converts given `kwargs` as str into kwargs dict."""
   if not kwargs_str:
     return {}
   kwarg_strs = kwargs_str.split(",")
   kwargs = {}
   for kwarg_str in kwarg_strs:
     kwarg_name, kwarg_val = kwarg_str.split("=")
+    if kwarg_name == constants.FILE_FORMAT_ARG:
+      _validate_format(kwarg_val)
     kwargs[kwarg_name] = _cast_to_pod(kwarg_val)
   return kwargs
 

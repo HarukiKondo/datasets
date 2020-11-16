@@ -143,6 +143,7 @@ class DatasetBuilder(registered.RegisteredDataset):
       data_dir: Optional[utils.PathLike] = None,
       config: Union[None, str, BuilderConfig] = None,
       version: Union[None, str, utils.Version] = None,
+      file_format: Union[None, str] = constants.DEFAULT_FILE_FORMAT_STR,
   ):
     """Constructs a DatasetBuilder.
 
@@ -160,6 +161,8 @@ class DatasetBuilder(registered.RegisteredDataset):
         The special value "experimental_latest" will use the highest version,
         even if not default. This is not recommended unless you know what you
         are doing, as the version could be broken.
+      file_format: Optional format of the record files in which the dataset
+        will be read/written from.
     """
     if data_dir:
       data_dir = os.fspath(data_dir)  # Pathlib -> str
@@ -177,6 +180,7 @@ class DatasetBuilder(registered.RegisteredDataset):
       self.info.read_from_directory(self._data_dir)
     else:  # Use the code version (do not restore data)
       self.info.initialize_from_bucket()
+    self._file_format = constants.FileFormat[file_format]
 
   @utils.classproperty
   @classmethod
@@ -906,7 +910,8 @@ class FileReaderBuilder(DatasetBuilder):
 
   @property
   def _tfrecords_reader(self):
-    return tfrecords_reader.Reader(self._data_dir, self._example_specs)
+    return tfrecords_reader.Reader(self._data_dir, self._example_specs,
+                                   self._file_format)
 
   def _as_dataset(
       self,
@@ -1077,6 +1082,7 @@ class GeneratorBasedBuilder(FileReaderBuilder):
         max_examples_per_split=download_config.max_examples_per_split,
         beam_options=download_config.beam_options,
         beam_runner=download_config.beam_runner,
+        file_format=self._file_format,
     )
     # Wrap the generation inside a context manager.
     # If `beam` is used during generation (when a pipeline gets created),
@@ -1106,14 +1112,15 @@ class GeneratorBasedBuilder(FileReaderBuilder):
       _check_split_names(split_generators.keys())
 
       # Start generating data for all splits
+      path_suffix = constants.FILE_FORMAT_TO_FILE_SUFFIX.get(self._file_format)
+
       split_info_futures = [
           split_builder.submit_split_generation(  # pylint: disable=g-complex-comprehension
               split_name=split_name,
               generator=generator,
-              path=self.data_path / f"{self.name}-{split_name}.tfrecord",
-          )
-          for split_name, generator
-          in utils.tqdm(split_generators.items(), unit=" splits", leave=False)
+              path=self.data_path / f"{self.name}-{split_name}.{path_suffix}",
+          ) for split_name, generator in utils.tqdm(
+              split_generators.items(), unit=" splits", leave=False)
       ]
     # Finalize the splits (after apache beam completed, if it was used)
     split_infos = [future.result() for future in split_info_futures]
